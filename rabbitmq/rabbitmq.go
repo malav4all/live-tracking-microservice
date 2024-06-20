@@ -1,9 +1,9 @@
 package rabbitmq
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"git.imz.world/event-console/live-tracking-microservice/config"
 	"github.com/streadway/amqp"
@@ -19,106 +19,93 @@ func InitRabbitMQ(cfg *config.Config) {
 	if err != nil {
 		panic(fmt.Sprintf("Failed to connect to RabbitMQ: %s", err))
 	}
-
 	rabbitCh, err = rabbitConn.Channel()
 	if err != nil {
 		panic(fmt.Sprintf("Failed to open a channel: %s", err))
 	}
 
-	_, err = rabbitCh.QueueDeclare(
-		"socket_parser_trackloc_10N(JSON)", // name
-		true,                               // durable
-		false,                              // delete when unused
-		false,                              // exclusive
-		false,                              // no-wait
-		nil,                                // arguments
-	)
-	if err != nil {
-		panic(fmt.Sprintf("Failed to declare queue: %s", err))
-	}
-	log.Println("RabbitMQ initialized and queue declared")
+	log.Println("RabbitMQ initialized and channel opened")
 }
 
 // SubscribeToTopic subscribes to a RabbitMQ topic and returns a channel for GraphQL subscription
-func SubscribeToTopic(topic string) <-chan string {
+func SubscribeToTopic(topic string) (<-chan string, error) {
 	fmt.Println("Subscribing to RabbitMQ topic:", topic)
 	messages := make(chan string)
 
+	// Validate topic
+	if !isValidTopic(topic) {
+		return nil, fmt.Errorf("invalid topic: %s", topic)
+	}
+
+	// Declare a unique queue for this subscription
+	q, err := rabbitCh.QueueDeclare(
+		"",    // name
+		false, // durable
+		false, // delete when unused
+		true,  // exclusive
+		false, // no-wait
+		nil,   // arguments
+	)
+	if err != nil {
+		log.Printf("Failed to declare a queue: %s", err)
+		return nil, err
+	}
+
+	err = rabbitCh.QueueBind(
+		q.Name,                   // queue name
+		topic,                    // routing key
+		"live_tracking_exchange", // exchange
+		false,
+		nil,
+	)
+	if err != nil {
+		log.Printf("Failed to bind queue: %s", err)
+		return nil, err
+	}
+
+	msgs, err := rabbitCh.Consume(
+		q.Name, // queue
+		"",     // consumer
+		true,   // auto-ack
+		false,  // exclusive
+		false,  // no-local
+		false,  // no-wait
+		nil,    // args
+	)
+	if err != nil {
+		log.Printf("Failed to register a consumer: %s", err)
+		return nil, err
+	}
+
 	go func() {
 		defer close(messages)
-
-		msgs, err := rabbitCh.Consume(
-			"socket_parser_trackloc_10N(JSON)", // queue
-			"",                                 // consumer
-			true,                               // auto-ack
-			false,                              // exclusive
-			false,                              // no-local
-			false,                              // no-wait
-			nil,                                // args
-		)
-		if err != nil {
-			log.Printf("Failed to register a consumer: %s", err)
-			return
-		}
-
 		fmt.Println("Waiting for messages from RabbitMQ...")
 		for d := range msgs {
 			// log.Printf("Received a message: %s", d.Body)
-
-			// Directly publish the message to the constructed topic
-			imei := extractJSONField(d.Body, "Imei")
-			log.Printf("Extracted imei: %s", imei)
-
-			if imei != "" {
-				// Construct routing key based on the JSON data
-				routingKey := fmt.Sprintf("track.%s", imei)
-				log.Printf("Constructed routing key: %s", routingKey)
-
-				err := publishToTopic(routingKey, d.Body)
-				if err != nil {
-					log.Printf("Failed to publish to topic: %s", err)
-				}
-
-				if routingKey == topic {
-					messages <- string(d.Body)
-				}
-			} else {
-				log.Printf("Invalid message structure: %s", string(d.Body))
-			}
+			messages <- string(d.Body)
 		}
 	}()
-
-	return messages
+	return messages, nil
 }
 
-// extractJSONField extracts a field from a JSON message without full unmarshalling
-func extractJSONField(data []byte, field string) string {
-	var jsonMap map[string]interface{}
-	if err := json.Unmarshal(data, &jsonMap); err != nil {
-		log.Printf("Failed to unmarshal JSON: %s", err)
-		return ""
+func isValidTopic(topic string) bool {
+	// Check if the topic starts with "track."
+	if !strings.HasPrefix(topic, "track.") {
+		return false
 	}
 
-	if value, ok := jsonMap[field]; ok {
-		return fmt.Sprintf("%v", value)
+	// Extract the IMEI part of the topic
+	parts := strings.Split(topic, ".")
+	if len(parts) < 2 {
+		return false
 	}
-	return ""
-}
 
-// publishToTopic publishes a message to the specified RabbitMQ topic
-func publishToTopic(topic string, message []byte) error {
-	err := rabbitCh.Publish(
-		"live_tracking_exchange", // exchange
-		topic,                    // routing key
-		false,                    // mandatory
-		false,                    // immediate
-		amqp.Publishing{
-			ContentType: "application/json",
-			Body:        message,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("failed to publish to topic: %w", err)
+	imei := parts[1]
+
+	// Check if the IMEI is a non-empty string
+	if imei == "" {
+		return false
 	}
-	return nil
+
+	return true
 }

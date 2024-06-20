@@ -24,10 +24,18 @@ func (query) Hello() string { return "Hello, world!" }
 type subscription struct{}
 
 func (subscription) Track(args struct{ Topic string }) <-chan string {
-	fmt.Println("Track subscription received with topic:", args.Topic)
+	fmt.Println("Track subscribed to topic:", args.Topic)
 	ch := make(chan string)
+
 	go func() {
-		for msg := range rabbitmq.SubscribeToTopic(args.Topic) {
+		messages, err := rabbitmq.SubscribeToTopic(args.Topic)
+		if err != nil {
+			log.Printf("Error subscribing to topic: %s", err)
+			close(ch)
+			return
+		}
+
+		for msg := range messages {
 			fmt.Println("msg:", msg)
 			var messageData map[string]interface{}
 			if err := json.Unmarshal([]byte(msg), &messageData); err != nil {
