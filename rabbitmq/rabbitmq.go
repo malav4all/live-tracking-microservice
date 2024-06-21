@@ -52,9 +52,9 @@ func SubscribeToTopic(topic string) (<-chan string, error) {
 	}
 
 	err = rabbitCh.QueueBind(
-		q.Name,                   // queue name
-		topic,                    // routing key
-		"live_tracking_exchange", // exchange
+		q.Name,          // queue name
+		topic,           // routing key
+		"live_tracking", // exchange
 		false,
 		nil,
 	)

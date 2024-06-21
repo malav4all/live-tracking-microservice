@@ -36,13 +36,15 @@ func (subscription) Track(args struct{ Topic string }) <-chan string {
 		}
 
 		for msg := range messages {
-			fmt.Println("msg:", msg)
+			fmt.Println("---------------------Update Message Received------------------------", msg)
 			var messageData map[string]interface{}
 			if err := json.Unmarshal([]byte(msg), &messageData); err != nil {
 				log.Printf("Error unmarshalling message: %s", err)
 				continue
 			}
 			ch <- string(msg)
+
+			fmt.Println("---------------------End Message Received------------------------")
 		}
 		close(ch)
 	}()
