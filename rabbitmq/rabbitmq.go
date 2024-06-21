@@ -6,16 +6,16 @@ import (
 	"strings"
 
 	"git.imz.world/event-console/live-tracking-microservice/config"
-	"github.com/streadway/amqp"
+	"github.com/rabbitmq/amqp091-go"
 )
 
-var rabbitConn *amqp.Connection
-var rabbitCh *amqp.Channel
+var rabbitConn *amqp091.Connection
+var rabbitCh *amqp091.Channel
 
 // InitRabbitMQ initializes the RabbitMQ connection and channel
 func InitRabbitMQ(cfg *config.Config) {
 	var err error
-	rabbitConn, err = amqp.Dial(cfg.RabbitMQ.URL)
+	rabbitConn, err = amqp091.Dial(cfg.RabbitMQ.URL)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to connect to RabbitMQ: %s", err))
 	}

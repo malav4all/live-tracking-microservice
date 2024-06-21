@@ -17,6 +17,7 @@ require (
 	github.com/gorilla/handlers v1.5.2 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
+	github.com/rabbitmq/amqp091-go v1.10.0 // indirect
 	github.com/sosodev/duration v1.3.1 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.16 // indirect
 )
