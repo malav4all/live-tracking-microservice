@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/99designs/gqlgen/graphql/playground"
 	"github.com/gorilla/handlers"
@@ -23,31 +24,52 @@ func (query) Hello() string { return "Hello, world!" }
 
 type subscription struct{}
 
-func (subscription) Track(args struct{ Topic string }) <-chan string {
-	fmt.Println("Track subscribed to topic:", args.Topic)
+func (subscription) Track(args struct {
+	AccountId string
+	Imeis     *[]string
+}) <-chan string {
+	fmt.Println("Track subscribed to accountId:", args.AccountId)
 	ch := make(chan string)
 
 	go func() {
-		messages, err := rabbitmq.SubscribeToTopic(args.Topic)
-		if err != nil {
-			log.Printf("Error subscribing to topic: %s", err)
-			close(ch)
-			return
-		}
+		defer close(ch)
+		var topics []string
 
-		for msg := range messages {
-			fmt.Println("---------------------Update Message Received------------------------", msg)
-			var messageData map[string]interface{}
-			if err := json.Unmarshal([]byte(msg), &messageData); err != nil {
-				log.Printf("Error unmarshalling message: %s", err)
-				continue
+		if args.Imeis == nil || len(*args.Imeis) == 0 {
+			// If no specific IMEIs are provided, subscribe to all messages for the account
+			topics = append(topics, fmt.Sprintf("track.%s", args.AccountId))
+		} else {
+			// Subscribe to each provided IMEI
+			for _, imei := range *args.Imeis {
+				topics = append(topics, fmt.Sprintf("track.%s.%s", args.AccountId, imei))
 			}
-			ch <- string(msg)
-
-			fmt.Println("---------------------End Message Received------------------------")
 		}
-		close(ch)
+
+		var wg sync.WaitGroup
+		for _, topic := range topics {
+			wg.Add(1)
+			go func(topic string) {
+				defer wg.Done()
+				messages, err := rabbitmq.SubscribeToTopic(topic)
+				if err != nil {
+					log.Printf("Error subscribing to topic: %s", err)
+					return
+				}
+				for msg := range messages {
+					fmt.Println("---------------------Update Message Received------------------------", msg)
+					var messageData map[string]interface{}
+					if err := json.Unmarshal([]byte(msg), &messageData); err != nil {
+						log.Printf("Error unmarshalling message: %s", err)
+						continue
+					}
+					ch <- string(msg)
+					fmt.Println("---------------------End Message Received------------------------")
+				}
+			}(topic)
+		}
+		wg.Wait()
 	}()
+
 	return ch
 }
 
@@ -71,7 +93,7 @@ func main() {
             hello: String!
         }
         type Subscription {
-            track(topic: String!): String!
+            track(accountId: String!, imeis: [String!]): String!
         }
     `
 	schema := graphql.MustParseSchema(s, &struct {
