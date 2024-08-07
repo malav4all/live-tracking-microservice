@@ -3,14 +3,18 @@ package rabbitmq
 import (
 	"fmt"
 	"log"
-	"strings"
+	"sync"
 
 	"git.imz.world/event-console/live-tracking-microservice/config"
 	"github.com/rabbitmq/amqp091-go"
 )
 
-var rabbitConn *amqp091.Connection
-var rabbitCh *amqp091.Channel
+var (
+	rabbitConn   *amqp091.Connection
+	rabbitCh     *amqp091.Channel
+	lastMessages = make(map[string]string)
+	mu           sync.Mutex
+)
 
 // InitRabbitMQ initializes the RabbitMQ connection and channel
 func InitRabbitMQ(cfg *config.Config) {
@@ -31,11 +35,6 @@ func InitRabbitMQ(cfg *config.Config) {
 func SubscribeToTopic(topic string) (<-chan string, error) {
 	fmt.Println("Subscribing to RabbitMQ topic:", topic)
 	messages := make(chan string)
-
-	// Validate topic
-	if !isValidTopic(topic) {
-		return nil, fmt.Errorf("invalid topic: %s", topic)
-	}
 
 	// Declare a unique queue for this subscription
 	q, err := rabbitCh.QueueDeclare(
@@ -80,32 +79,20 @@ func SubscribeToTopic(topic string) (<-chan string, error) {
 	go func() {
 		defer close(messages)
 		fmt.Println("Waiting for messages from RabbitMQ...")
+
+		// Send the last known message for the topic to the new subscriber
+		mu.Lock()
+		if lastMessage, ok := lastMessages[topic]; ok {
+			messages <- lastMessage
+		}
+		mu.Unlock()
+
 		for d := range msgs {
-			// log.Printf("Received a message: %s", d.Body)
+			mu.Lock()
+			lastMessages[topic] = string(d.Body)
+			mu.Unlock()
 			messages <- string(d.Body)
 		}
 	}()
 	return messages, nil
-}
-
-func isValidTopic(topic string) bool {
-	// Check if the topic starts with "track."
-	if !strings.HasPrefix(topic, "track.") {
-		return false
-	}
-
-	// Extract the IMEI part of the topic
-	parts := strings.Split(topic, ".")
-	if len(parts) < 2 {
-		return false
-	}
-
-	imei := parts[1]
-
-	// Check if the IMEI is a non-empty string
-	if imei == "" {
-		return false
-	}
-
-	return true
 }
