@@ -32,7 +32,7 @@ func InitRabbitMQ(cfg *config.Config) {
 }
 
 // SubscribeToTopic subscribes to a RabbitMQ topic and returns a channel for GraphQL subscription
-func SubscribeToTopic(topic string) (<-chan string, error) {
+func SubscribeToTopic(topic, topicType string) (<-chan string, error) {
 	fmt.Println("Subscribing to RabbitMQ topic:", topic)
 	messages := make(chan string)
 
@@ -50,10 +50,15 @@ func SubscribeToTopic(topic string) (<-chan string, error) {
 		return nil, err
 	}
 
+	exchange := "live_tracking"
+	if topicType == "alert" {
+		exchange = "alert_exchange"
+	}
+
 	err = rabbitCh.QueueBind(
-		q.Name,          // queue name
-		topic,           // routing key
-		"live_tracking", // exchange
+		q.Name,   // queue name
+		topic,    // routing key
+		exchange, // exchange
 		false,
 		nil,
 	)

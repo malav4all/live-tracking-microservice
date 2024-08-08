@@ -27,8 +27,9 @@ type subscription struct{}
 func (subscription) Track(args struct {
 	AccountId string
 	Imeis     *[]string
+	TopicType string
 }) <-chan string {
-	fmt.Println("Track subscribed to accountId:", args.AccountId)
+	fmt.Println("Track subscribed to accountId:", args.AccountId, "with topic type:", args.TopicType)
 	ch := make(chan string)
 
 	go func() {
@@ -37,11 +38,11 @@ func (subscription) Track(args struct {
 
 		if args.Imeis == nil || len(*args.Imeis) == 0 {
 			// If no specific IMEIs are provided, subscribe to all messages for the account
-			topics = append(topics, fmt.Sprintf("track.%s", args.AccountId))
+			topics = append(topics, fmt.Sprintf("%s.%s", args.TopicType, args.AccountId))
 		} else {
 			// Subscribe to each provided IMEI
 			for _, imei := range *args.Imeis {
-				topics = append(topics, fmt.Sprintf("track.%s.%s", args.AccountId, imei))
+				topics = append(topics, fmt.Sprintf("%s.%s.%s", args.TopicType, args.AccountId, imei))
 			}
 		}
 
@@ -50,7 +51,7 @@ func (subscription) Track(args struct {
 			wg.Add(1)
 			go func(topic string) {
 				defer wg.Done()
-				messages, err := rabbitmq.SubscribeToTopic(topic)
+				messages, err := rabbitmq.SubscribeToTopic(topic, args.TopicType)
 				if err != nil {
 					log.Printf("Error subscribing to topic: %s", err)
 					return
@@ -93,7 +94,7 @@ func main() {
             hello: String!
         }
         type Subscription {
-            track(accountId: String!, imeis: [String!]): String!
+            track(accountId: String!, imeis: [String!], topicType: String!): String!
         }
     `
 	schema := graphql.MustParseSchema(s, &struct {
