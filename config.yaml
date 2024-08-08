@@ -1,2 +1,2 @@
 rabbitmq:
-  url: "amqp://admin:admin@103.20.214.74:5673/"
+  url: "amqp://guest:guest@103.20.214.201:5655/"
