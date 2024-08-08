@@ -125,6 +125,6 @@ func main() {
 		handlers.AllowedHeaders([]string{"Content-Type", "Authorization"}),
 	)(r)
 
-	log.Println("Starting server on :9090...")
-	log.Fatal(http.ListenAndServe(":9090", corsHandler))
+	log.Println("Starting server on :6000...")
+	log.Fatal(http.ListenAndServe(":6000", corsHandler))
 }
