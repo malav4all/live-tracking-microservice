@@ -85,12 +85,14 @@ func SubscribeToTopic(topic, topicType string) (<-chan string, error) {
 		defer close(messages)
 		fmt.Println("Waiting for messages from RabbitMQ...")
 
-		// Send the last known message for the topic to the new subscriber
-		mu.Lock()
-		if lastMessage, ok := lastMessages[topic]; ok {
-			messages <- lastMessage
+		// Check if the exchange is "live_tracking" and send the last known message for the topic
+		if exchange == "live_tracking" {
+			mu.Lock()
+			if lastMessage, ok := lastMessages[topic]; ok {
+				messages <- lastMessage
+			}
+			mu.Unlock()
 		}
-		mu.Unlock()
 
 		for d := range msgs {
 			mu.Lock()
