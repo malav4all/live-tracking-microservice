@@ -25,49 +25,34 @@ func (query) Hello() string { return "Hello, world!" }
 type subscription struct{}
 
 func (subscription) Track(args struct {
-	AccountId string
-	Imeis     *[]string
-	TopicType string
+	GroupID string
+	Imeis   *[]string
 }) <-chan string {
-	fmt.Println("Track subscribed to accountId:", args.AccountId, "with topic type:", args.TopicType)
+	fmt.Println("Track subscribed with group ID:", args.GroupID)
 	ch := make(chan string)
 
 	go func() {
 		defer close(ch)
-		var topics []string
-
-		if args.Imeis == nil || len(*args.Imeis) == 0 {
-			// If no specific IMEIs are provided, subscribe to all messages for the account
-			topics = append(topics, fmt.Sprintf("%s.%s", args.TopicType, args.AccountId))
-		} else {
-			// Subscribe to each provided IMEI
-			for _, imei := range *args.Imeis {
-				topics = append(topics, fmt.Sprintf("%s.%s.%s", args.TopicType, args.AccountId, imei))
-			}
-		}
 
 		var wg sync.WaitGroup
-		for _, topic := range topics {
-			wg.Add(1)
-			go func(topic string) {
-				defer wg.Done()
-				messages, err := kafka.SubscribeToTopic(topic)
-				if err != nil {
-					log.Printf("Error subscribing to topic: %s", err)
-					return
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			messages, err := kafka.Subscribe(args.GroupID, args.Imeis)
+			if err != nil {
+				log.Printf("Error subscribing: %s", err)
+				return
+			}
+			for msg := range messages {
+				fmt.Println("Received Kafka Message:", msg)
+				var messageData map[string]interface{}
+				if err := json.Unmarshal([]byte(msg), &messageData); err != nil {
+					log.Printf("Error unmarshalling message: %s", err)
+					continue
 				}
-				for msg := range messages {
-					fmt.Println("Received Kafka Message:", msg)
-					var messageData map[string]interface{}
-					if err := json.Unmarshal([]byte(msg), &messageData); err != nil {
-						log.Printf("Error unmarshalling message: %s", err)
-						continue
-					}
-					ch <- string(msg)
-					fmt.Println("---------------------End Message Received------------------------")
-				}
-			}(topic)
-		}
+				ch <- string(msg)
+			}
+		}()
 		wg.Wait()
 	}()
 
@@ -94,7 +79,7 @@ func main() {
             hello: String!
         }
         type Subscription {
-            track(accountId: String!, imeis: [String!], topicType: String!): String!
+            track(groupId: String!, imeis: [String!]): String!
         }
     `
 	schema := graphql.MustParseSchema(s, &struct {
@@ -107,7 +92,7 @@ func main() {
 
 	// Set up GraphQL Playground handler
 	playgroundHandler := playground.Handler("GraphQL Playground", "/playground")
-
+		
 	// Set up GraphQL WebSocket handler
 	graphQLHandler := graphqlws.NewHandlerFunc(schema, &relay.Handler{Schema: schema})
 

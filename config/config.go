@@ -11,7 +11,6 @@ import (
 type Config struct {
 	Kafka struct {
 		Brokers []string `yaml:"brokers"`
-		Topic   string   `yaml:"topic"`
 		Group   string   `yaml:"group"`
 	} `yaml:"kafka"`
 }

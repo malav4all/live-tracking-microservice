@@ -12,30 +12,35 @@ import (
 var kafkaReader *kafka.Reader
 var kafkaWriter *kafka.Writer
 
-// InitKafka initializes Kafka producer and consumer
+// InitKafka initializes the Kafka consumer and producer
 func InitKafka(cfg *config.Config) {
 	// Initialize Kafka Reader (Consumer)
 	kafkaReader = kafka.NewReader(kafka.ReaderConfig{
 		Brokers:  cfg.Kafka.Brokers,
-		Topic:    cfg.Kafka.Topic,
 		GroupID:  cfg.Kafka.Group,
-		MinBytes: 10e3, // 10KB
-		MaxBytes: 10e6, // 10MB
+		MinBytes: 10e3,
+		MaxBytes: 10e6,
 	})
 
 	// Initialize Kafka Writer (Producer)
 	kafkaWriter = &kafka.Writer{
 		Addr:     kafka.TCP(cfg.Kafka.Brokers...),
-		Topic:    cfg.Kafka.Topic,
+		Topic:    "live_tracking", // Default topic for tracking data
 		Balancer: &kafka.LeastBytes{},
 	}
 
 	log.Println("Kafka initialized: Reader and Writer created")
 }
 
-// SubscribeToTopic subscribes to a Kafka topic and returns a channel for GraphQL subscription
-func SubscribeToTopic(topic string) (<-chan string, error) {
-	fmt.Println("Subscribing to Kafka topic:", topic)
+// Subscribe listens to Kafka messages based on groupId and imeis
+func Subscribe(groupID string, imeis *[]string) (<-chan string, error) {
+	reader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:  kafkaReader.Config().Brokers,
+		GroupID:  groupID, // Dynamic group ID
+		MinBytes: 10e3,
+		MaxBytes: 10e6,
+	})
+
 	messages := make(chan string)
 
 	go func() {
@@ -43,7 +48,7 @@ func SubscribeToTopic(topic string) (<-chan string, error) {
 		fmt.Println("Waiting for messages from Kafka...")
 
 		for {
-			msg, err := kafkaReader.ReadMessage(context.Background())
+			msg, err := reader.ReadMessage(context.Background())
 			if err != nil {
 				log.Printf("Error reading Kafka message: %s", err)
 				continue
@@ -72,7 +77,7 @@ func PublishMessage(topic, message string) error {
 	return nil
 }
 
-// CloseKafka closes the Kafka connections
+// CloseKafka closes the Kafka consumer and producer
 func CloseKafka() {
 	if kafkaReader != nil {
 		kafkaReader.Close()
