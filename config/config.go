@@ -9,9 +9,11 @@ import (
 
 // Config structure for holding configuration values
 type Config struct {
-	RabbitMQ struct {
-		URL string `yaml:"url"`
-	} `yaml:"rabbitmq"`
+	Kafka struct {
+		Brokers []string `yaml:"brokers"`
+		Topic   string   `yaml:"topic"`
+		Group   string   `yaml:"group"`
+	} `yaml:"kafka"`
 }
 
 // LoadConfig loads the configuration from a YAML file

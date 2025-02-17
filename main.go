@@ -15,7 +15,7 @@ import (
 	"github.com/graph-gophers/graphql-transport-ws/graphqlws"
 
 	"git.imz.world/event-console/live-tracking-microservice/config"
-	"git.imz.world/event-console/live-tracking-microservice/rabbitmq"
+	"git.imz.world/event-console/live-tracking-microservice/kafka"
 )
 
 type query struct{}
@@ -51,13 +51,13 @@ func (subscription) Track(args struct {
 			wg.Add(1)
 			go func(topic string) {
 				defer wg.Done()
-				messages, err := rabbitmq.SubscribeToTopic(topic, args.TopicType)
+				messages, err := kafka.SubscribeToTopic(topic)
 				if err != nil {
 					log.Printf("Error subscribing to topic: %s", err)
 					return
 				}
 				for msg := range messages {
-					fmt.Println("---------------------Update Message Received------------------------", msg)
+					fmt.Println("Received Kafka Message:", msg)
 					var messageData map[string]interface{}
 					if err := json.Unmarshal([]byte(msg), &messageData); err != nil {
 						log.Printf("Error unmarshalling message: %s", err)
@@ -81,8 +81,8 @@ func main() {
 		log.Fatalf("Failed to load configuration: %s", err)
 	}
 
-	// Initialize RabbitMQ
-	rabbitmq.InitRabbitMQ(cfg)
+	// Initialize Kafka
+	kafka.InitKafka(cfg)
 
 	// Initialize GraphQL schema and resolver
 	s := `

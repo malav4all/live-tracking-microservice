@@ -1,2 +1,5 @@
-rabbitmq:
-  url: "amqp://guest:guest@103.20.214.201:5655/"
+kafka:
+  brokers:
+    - "103.20.214.201:9092"
+  topic: "live_tracking"
+  group: "tracking_group"
