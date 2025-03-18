@@ -12,7 +12,12 @@ type Config struct {
 	Kafka struct {
 		Brokers []string `yaml:"brokers"`
 		Group   string   `yaml:"group"`
+		Topic   string   `yaml:"topic"`
 	} `yaml:"kafka"`
+
+	RabbitMQ struct {
+		URL string `yaml:"url"`
+	} `yaml:"rabbitmq"`
 }
 
 // LoadConfig loads the configuration from a YAML file

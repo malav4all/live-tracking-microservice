@@ -1,11 +1,14 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"log"
 	"net/http"
-	"sync"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/99designs/gqlgen/graphql/playground"
 	"github.com/gorilla/handlers"
@@ -27,47 +30,76 @@ type subscription struct{}
 func (subscription) Track(args struct {
 	GroupID string
 	Imeis   *[]string
+	Topic   *string // Optional topic parameter
 }) <-chan string {
-	fmt.Println("Track subscribed with group ID:", args.GroupID)
-	ch := make(chan string)
+	// Determine the topic to use
+	var topic string
+	if args.Topic != nil {
+		topic = *args.Topic
+	}
+
+	fmt.Printf("Track subscribed with Group ID: %s, IMEIs: %v, Topic: %s\n",
+		args.GroupID,
+		args.Imeis,
+		topic)
+
+	// Create buffered channel to prevent blocking
+	ch := make(chan string, 100)
 
 	go func() {
 		defer close(ch)
 
-		var wg sync.WaitGroup
-		wg.Add(1)
+		// Pass topic as an optional parameter
+		messages, errChan, err := kafka.Subscribe(
+			args.GroupID,
+			args.Imeis,
+			topic, // Optional topic
+		)
+		if err != nil {
+			log.Printf("Error subscribing: %s", err)
+			return
+		}
+
+		// Handle errors from Kafka
 		go func() {
-			defer wg.Done()
-			messages, err := kafka.Subscribe(args.GroupID, args.Imeis)
-			if err != nil {
-				log.Printf("Error subscribing: %s", err)
-				return
-			}
-			for msg := range messages {
-				fmt.Println("Received Kafka Message:", msg)
-				var messageData map[string]interface{}
-				if err := json.Unmarshal([]byte(msg), &messageData); err != nil {
-					log.Printf("Error unmarshalling message: %s", err)
-					continue
-				}
-				ch <- string(msg)
+			for kafkaErr := range errChan {
+				log.Printf("Kafka subscription error: %v", kafkaErr)
 			}
 		}()
-		wg.Wait()
+
+		// Process messages immediately as they arrive
+		for msg := range messages {
+			fmt.Println("Received Kafka Message:", msg)
+			// Non-blocking send to channel - prevents potential deadlocks
+			select {
+			case ch <- msg:
+				// Message sent successfully
+			default:
+				// Channel is full, log this situation
+				log.Printf("Warning: Channel full, dropping message")
+			}
+		}
 	}()
 
 	return ch
 }
 
 func main() {
+	// Setup logging
+	log.SetOutput(os.Stdout)
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
 	// Load configuration
 	cfg, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %s", err)
 	}
 
-	// Initialize Kafka
-	kafka.InitKafka(cfg)
+	// Initialize Kafka with error handling
+	if err := kafka.InitKafka(cfg); err != nil {
+		log.Fatalf("Failed to initialize Kafka: %s", err)
+	}
+	// Ensure Kafka connections are closed
 
 	// Initialize GraphQL schema and resolver
 	s := `
@@ -79,8 +111,8 @@ func main() {
             hello: String!
         }
         type Subscription {
-            track(groupId: String!, imeis: [String!]): String!
-        }
+    track(groupId: String!, imeis: [String!], topic: String): String!
+}
     `
 	schema := graphql.MustParseSchema(s, &struct {
 		query
@@ -92,25 +124,54 @@ func main() {
 
 	// Set up GraphQL Playground handler
 	playgroundHandler := playground.Handler("GraphQL Playground", "/playground")
-		
+
 	// Set up GraphQL WebSocket handler
 	graphQLHandler := graphqlws.NewHandlerFunc(schema, &relay.Handler{Schema: schema})
 
 	r.Handle("/query", &relay.Handler{Schema: schema})
-
-	// Serve the GraphQL Playground UI
 	r.Handle("/playground", playgroundHandler)
-
-	// Serve the WebSocket handler for subscriptions
 	r.Handle("/subscriptions", graphQLHandler)
 
-	// Add CORS support
+	// Add CORS support with more secure defaults
 	corsHandler := handlers.CORS(
-		handlers.AllowedOrigins([]string{"*"}),
+		handlers.AllowedOrigins([]string{"http://localhost:5173", "https://yourdomain.com"}),
 		handlers.AllowedMethods([]string{"GET", "POST", "OPTIONS"}),
 		handlers.AllowedHeaders([]string{"Content-Type", "Authorization"}),
+		handlers.AllowCredentials(),
 	)(r)
 
-	log.Println("Starting server on :9090...")
-	log.Fatal(http.ListenAndServe(":9090", corsHandler))
+	// Graceful shutdown setup
+	srv := &http.Server{
+		Addr:         ":9090",
+		Handler:      corsHandler,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
+	// Create a channel to listen for interrupt signals
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	// Start server in a separate goroutine
+	go func() {
+		log.Println("Starting server on :9090...")
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	// Block until a signal is received
+	<-stop
+
+	// Create a context with a timeout for graceful shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	log.Println("Shutting down server gracefully...")
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("Server shutdown error: %v", err)
+	}
+
+	log.Println("Server stopped")
 }
