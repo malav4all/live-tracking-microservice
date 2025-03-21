@@ -22,12 +22,11 @@ var (
 )
 
 // InitKafka initializes the Kafka consumer and producer
-// InitKafka with improved error handling and connection retries
 func InitKafka(cfg *config.Config) error {
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Initialize the IMEI cache
+	// Initialize the caches
 	imeiCache = make(map[string]string)
 
 	// Validate configuration
@@ -57,7 +56,6 @@ func InitKafka(cfg *config.Config) error {
 		MaxWait:     100 * time.Millisecond,
 		StartOffset: kafka.LastOffset,
 		ErrorLogger: kafka.LoggerFunc(log.Printf),
-		// Add dial timeout to detect connection issues earlier
 		Dialer: &kafka.Dialer{
 			Timeout:   30 * time.Second,
 			DualStack: true,
@@ -70,12 +68,11 @@ func InitKafka(cfg *config.Config) error {
 		Topic:        topic,
 		Balancer:     &kafka.LeastBytes{},
 		RequiredAcks: kafka.RequireOne,
-		MaxAttempts:  5, // Increased from 3
+		MaxAttempts:  5,
 		BatchTimeout: 5 * time.Millisecond,
-		WriteTimeout: 10 * time.Second, // Increased from 5 seconds
-		ReadTimeout:  10 * time.Second, // Added read timeout
-		// Add better error handling
-		ErrorLogger: kafka.LoggerFunc(log.Printf),
+		WriteTimeout: 10 * time.Second,
+		ReadTimeout:  10 * time.Second,
+		ErrorLogger:  kafka.LoggerFunc(log.Printf),
 	}
 
 	// Test connection before returning
@@ -110,7 +107,7 @@ func UpdateIMEICache(imei string, packet string) {
 	imeiCache[imei] = packet
 }
 
-// Subscribe method updated to allow overriding topic and group ID and handle IMEI caching
+// Subscribe handles subscriptions to Kafka topics with proper handling for different topic types
 func Subscribe(groupID string, imeis *[]string, topic ...string) (<-chan string, <-chan error, error) {
 	// Use configured topic if no topic is provided
 	useTopic := kafkaReader.Config().Topic
@@ -123,14 +120,19 @@ func Subscribe(groupID string, imeis *[]string, topic ...string) (<-chan string,
 		groupID = kafkaReader.Config().GroupID
 	}
 
+	// Create a unique consumer group ID for each subscription to avoid message loss
+	uniqueGroupID := fmt.Sprintf("%s-%d", groupID, time.Now().UnixNano())
+
+	log.Printf("Creating subscription with unique group ID: %s for topic: %s", uniqueGroupID, useTopic)
+
 	// Create reader with the specified or default group ID and topic
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:     kafkaReader.Config().Brokers,
-		GroupID:     groupID,
+		GroupID:     uniqueGroupID,
 		Topic:       useTopic,
-		MinBytes:    1e3, // Reduced from 10e3 to process smaller batches
+		MinBytes:    1e3,
 		MaxBytes:    10e6,
-		MaxWait:     100 * time.Millisecond, // Add max wait time to receive messages more quickly
+		MaxWait:     100 * time.Millisecond,
 		StartOffset: kafka.LastOffset,
 	})
 
@@ -139,7 +141,8 @@ func Subscribe(groupID string, imeis *[]string, topic ...string) (<-chan string,
 	errChan := make(chan error, 10)
 
 	// Send immediate latest cached packets for all requested IMEIs
-	if imeis != nil && len(*imeis) > 0 {
+	// But only if we're not on the live_alert topic
+	if imeis != nil && len(*imeis) > 0 && useTopic != "live_alert" {
 		go func() {
 			imeiCacheMu.RLock()
 			for _, imei := range *imeis {
@@ -161,7 +164,7 @@ func Subscribe(groupID string, imeis *[]string, topic ...string) (<-chan string,
 			}
 		}()
 
-		log.Printf("Waiting for messages from Kafka (Topic: %s, Group ID: %s)", useTopic, groupID)
+		log.Printf("Waiting for messages from Kafka (Topic: %s, Group ID: %s)", useTopic, uniqueGroupID)
 
 		for {
 			// Use a shorter context timeout for quicker message processing
@@ -209,8 +212,15 @@ func Subscribe(groupID string, imeis *[]string, topic ...string) (<-chan string,
 				continue
 			}
 
-			// Always update the cache with the latest packet for this IMEI
-			UpdateIMEICache(imeiValue, string(msg.Value))
+			// Handle topic-specific caching
+			if useTopic != "live_alert" {
+				// For live_tracking, update the cache
+				UpdateIMEICache(imeiValue, string(msg.Value))
+				log.Printf("Updated tracking cache for IMEI %s", imeiValue)
+			} else {
+				// For live_alert, we don't cache but log it
+				log.Printf("Processing alert for IMEI %s", imeiValue)
+			}
 
 			// IMEI filtering
 			if imeis != nil && len(*imeis) > 0 {
@@ -223,6 +233,7 @@ func Subscribe(groupID string, imeis *[]string, topic ...string) (<-chan string,
 				}
 
 				if !matched {
+					log.Printf("IMEI %s doesn't match filter, skipping", imeiValue)
 					continue
 				}
 			}
@@ -231,7 +242,7 @@ func Subscribe(groupID string, imeis *[]string, topic ...string) (<-chan string,
 			select {
 			case messages <- string(msg.Value):
 				// Message sent successfully
-				log.Printf("Message for IMEI %s forwarded to subscriber", imeiValue)
+				log.Printf("Message for IMEI %s on topic %s forwarded to subscriber", imeiValue, useTopic)
 			default:
 				// Channel is full, log this situation
 				log.Printf("Warning: Messages channel full, dropping message for IMEI %s", imeiValue)
