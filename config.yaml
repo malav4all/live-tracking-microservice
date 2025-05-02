@@ -1,9 +1,0 @@
-kafka:
-  brokers: 
-  - "103.20.212.44:9092"
-  group: "socket508producer"
-  topic: ""
-
-  rabbitmq:
-    url: "amqp://guest:guest@103.20.214.201:5655/"
-
