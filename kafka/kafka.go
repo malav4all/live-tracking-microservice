@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
-	"git.imz.world/event-console/live-tracking-microservice/config"
+	"github.com/joho/godotenv"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -21,34 +23,58 @@ var (
 	imeiCacheMu sync.RWMutex
 )
 
-// InitKafka initializes the Kafka consumer and producer
-func InitKafka(cfg *config.Config) error {
+// LoadEnv loads environment variables from .env file
+func LoadEnv() error {
+	return godotenv.Load()
+}
+
+// getEnvWithDefault gets an environment variable with a default value if not set
+func getEnvWithDefault(key, defaultValue string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	return value
+}
+
+// InitKafka initializes the Kafka consumer and producer using environment variables
+func InitKafka() error {
+	// Load environment variables
+	if err := LoadEnv(); err != nil {
+		log.Printf("Warning: Failed to load .env file: %s", err)
+		// Continue execution, will use default values if env vars not set
+	}
+
 	mu.Lock()
 	defer mu.Unlock()
 
 	// Initialize the caches
 	imeiCache = make(map[string]string)
 
+	// Get Kafka brokers from environment
+	brokersStr := getEnvWithDefault("KAFKA_BROKERS", "103.20.212.44:9092")
+	brokers := strings.Split(brokersStr, ",")
+
 	// Validate configuration
-	if len(cfg.Kafka.Brokers) == 0 {
+	if len(brokers) == 0 {
 		return fmt.Errorf("no Kafka brokers specified")
 	}
 
-	// Use a default topic if not specified in config
-	topic := cfg.Kafka.Topic
+	// Use a default topic if not specified in environment
+	topic := getEnvWithDefault("KAFKA_TOPIC", "default_topic")
 	if topic == "" {
 		topic = "default_topic"
 	}
 
-	// Use a default group ID if not specified in config
-	groupID := cfg.Kafka.Group
+	// Use a default group ID if not specified in environment
+	groupID := getEnvWithDefault("KAFKA_GROUP", "default_group")
 	if groupID == "" {
 		groupID = "default_group"
 	}
 
 	// Initialize Kafka Reader with better error handling
 	kafkaReader = kafka.NewReader(kafka.ReaderConfig{
-		Brokers:     cfg.Kafka.Brokers,
+		Brokers:     brokers,
 		GroupID:     groupID,
 		Topic:       topic,
 		MinBytes:    1e3,
@@ -64,7 +90,7 @@ func InitKafka(cfg *config.Config) error {
 
 	// Initialize Kafka Writer with better error handling
 	kafkaWriter = &kafka.Writer{
-		Addr:         kafka.TCP(cfg.Kafka.Brokers...),
+		Addr:         kafka.TCP(brokers...),
 		Topic:        topic,
 		Balancer:     &kafka.LeastBytes{},
 		RequiredAcks: kafka.RequireOne,
@@ -80,7 +106,7 @@ func InitKafka(cfg *config.Config) error {
 	defer cancel()
 
 	// Ping test to check if brokers are reachable
-	conn, err := kafka.DialLeader(testCtx, "tcp", cfg.Kafka.Brokers[0], topic, 0)
+	conn, err := kafka.DialLeader(testCtx, "tcp", brokers[0], topic, 0)
 	if err != nil {
 		return fmt.Errorf("failed to connect to Kafka broker: %w", err)
 	}
